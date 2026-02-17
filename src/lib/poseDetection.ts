@@ -502,6 +502,23 @@ export async function processVideo(
 
     onProgress?.(100, "Analysis complete");
 
+    // Diagnostic logging
+    if (frames.length > 0) {
+      const hipYs = frames.map(f => (f.landmarks[23].y + f.landmarks[24].y) / 2);
+      const minHipY = Math.min(...hipYs);
+      const maxHipY = Math.max(...hipYs);
+      console.log(`[PoseDetection] Frames: ${frames.length}, FPS: ${detectedFps}, Duration: ${duration.toFixed(2)}s`);
+      console.log(`[PoseDetection] Hip Y range: ${minHipY.toFixed(4)} - ${maxHipY.toFixed(4)} (delta: ${(maxHipY - minHipY).toFixed(4)})`);
+      console.log(`[PoseDetection] First frame hip Y: ${hipYs[0].toFixed(4)}, Mid: ${hipYs[Math.floor(hipYs.length/2)].toFixed(4)}, Last: ${hipYs[hipYs.length-1].toFixed(4)}`);
+      console.log(`[PoseDetection] Video dimensions: ${videoEl.videoWidth}x${videoEl.videoHeight}`);
+      // Sample a few hip Y values to check if they're all identical (seeking issue)
+      const samples = [0, Math.floor(frames.length*0.25), Math.floor(frames.length*0.5), Math.floor(frames.length*0.75), frames.length-1];
+      console.log(`[PoseDetection] Hip Y samples:`, samples.map(i => hipYs[i]?.toFixed(4)));
+    } else {
+      console.log(`[PoseDetection] No frames detected! Duration: ${duration.toFixed(2)}s, Steps: ${totalSteps}`);
+    }
+
+
     // Check if we detected a person at all
     if (frames.length === 0) {
       throw new Error("Could not detect a person in the video. Make sure your full body is visible and the lighting is good.");
