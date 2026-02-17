@@ -412,12 +412,12 @@ function detectExerciseType(frames: PoseFrame[]): ExerciseType {
   const hipXRange = Math.max(...hipXValues) - Math.min(...hipXValues);
   const kneeAngleRange = kneeAngles.length > 0 ? Math.max(...kneeAngles) - Math.min(...kneeAngles) : 0;
 
-  // Squat: meaningful hip Y range with knee bend
-  if (hipYRange > 0.1 && kneeAngleRange > 30) return "squat";
+  // Squat: large hip Y range, small hip X range, large knee angle range
+  if (hipYRange > 0.15 && hipXRange < 0.08 && kneeAngleRange > 50) return "squat";
   // Deadlift: moderate hip Y range, more hip X movement, less knee bend
-  if (hipYRange > 0.08 && hipXRange > 0.05 && kneeAngleRange < 30) return "deadlift";
-  // If there's any meaningful vertical movement, assume squat (prefer false positive over rejection)
-  if (hipYRange > 0.05) return "squat";
+  if (hipYRange > 0.08 && hipXRange > 0.05 && kneeAngleRange < 50) return "deadlift";
+  // If there's decent vertical movement, assume squat
+  if (hipYRange > 0.1) return "squat";
 
   return "other";
 }
@@ -530,9 +530,12 @@ export async function processVideo(
     const cameraAngle = detectCameraAngle(frames);
     const exerciseType = detectExerciseType(frames);
 
-    // Log exercise type for debugging but don't gate — trust the user's upload
-    if (exerciseType !== "squat") {
-      console.warn(`[PoseDetection] Exercise type detected as "${exerciseType}", proceeding with squat analysis anyway`);
+    // Gate on exercise type
+    if (exerciseType === "deadlift") {
+      throw new Error("This looks like a deadlift, not a squat. RepPolice currently only supports squat analysis. Deadlift support coming soon!");
+    }
+    if (exerciseType === "other") {
+      throw new Error("Could not identify this as a squat exercise. Make sure the video shows a clear squat movement with visible hip and knee flexion.");
     }
 
     return {

@@ -681,10 +681,9 @@ export default function AnalyzePage() {
       setAnalysisProgress(90);
       setAnalysisStage("Analyzing form...");
 
-      const { analyzeSquat, trimFramesToReps, rebaseReps } = await import("@/lib/squatAnalysis");
+      const { analyzeSquat, trimFramesToReps } = await import("@/lib/squatAnalysis");
       const squatResult = analyzeSquat(poseResult.frames, poseResult.exerciseType, poseResult.cameraAngle);
       const trimmed = trimFramesToReps(poseResult.frames);
-      squatResult.reps = rebaseReps(squatResult.reps, trimmed.trimStartIdx);
 
       setAnalysisProgress(100);
       setAnalysisStage("Done!");

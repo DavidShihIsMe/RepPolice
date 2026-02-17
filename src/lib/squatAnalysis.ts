@@ -124,7 +124,7 @@ function detectReps(frames: PoseFrame[]): DetectedRep[] {
 
   // Find local maxima (bottom of squat = highest Y value in normalized coords)
   const minProminence = 0.02; // minimum Y-change to qualify as a rep
-  const rawBottoms: number[] = [];
+  const bottoms: number[] = [];
 
   for (let i = 2; i < smoothed.length - 2; i++) {
     if (
@@ -144,29 +144,8 @@ function detectReps(frames: PoseFrame[]): DetectedRep[] {
       }
       const prominence = smoothed[i] - Math.max(leftMin, rightMin);
       if (prominence >= minProminence) {
-        rawBottoms.push(i);
+        bottoms.push(i);
       }
-    }
-  }
-
-  // Merge peaks that are too close together (< 0.8s apart) — keep the deeper one
-  // This prevents a single rep with a pause/bounce at bottom from counting as two reps
-  const minGapSeconds = 0.8;
-  const bottoms: number[] = [];
-  for (let i = 0; i < rawBottoms.length; i++) {
-    if (bottoms.length === 0) {
-      bottoms.push(rawBottoms[i]);
-      continue;
-    }
-    const prev = bottoms[bottoms.length - 1];
-    const gap = frames[rawBottoms[i]].timestamp - frames[prev].timestamp;
-    if (gap < minGapSeconds) {
-      // Keep whichever peak is deeper (higher Y)
-      if (smoothed[rawBottoms[i]] > smoothed[prev]) {
-        bottoms[bottoms.length - 1] = rawBottoms[i];
-      }
-    } else {
-      bottoms.push(rawBottoms[i]);
     }
   }
 
@@ -1312,52 +1291,15 @@ export function analyzeSquat(
   };
 }
 
-// ─── Rebase Rep Indices ──────────────────────────────────────────────────────
-
-/** Shift all frame indices in reps so they are relative to a trimmed frames array. */
-export function rebaseReps(reps: RepData[], offset: number): RepData[] {
-  if (offset === 0) return reps;
-
-  function shiftMetric(m: MetricScore): MetricScore {
-    return { ...m, issueFrames: m.issueFrames.map((f) => f - offset) };
-  }
-
-  return reps.map((rep) => ({
-    ...rep,
-    startFrame: rep.startFrame - offset,
-    endFrame: rep.endFrame - offset,
-    bottomFrame: rep.bottomFrame - offset,
-    depth: shiftMetric(rep.depth),
-    kneeTracking: shiftMetric(rep.kneeTracking),
-    backAngle: shiftMetric(rep.backAngle),
-    barPath: shiftMetric(rep.barPath),
-    symmetry: shiftMetric(rep.symmetry),
-    buttWink: shiftMetric(rep.buttWink),
-    tempo: shiftMetric(rep.tempo),
-    heelRise: shiftMetric(rep.heelRise),
-    stanceWidth: shiftMetric(rep.stanceWidth),
-    hipShift: shiftMetric(rep.hipShift),
-    kneeValgus: shiftMetric(rep.kneeValgus),
-    kneeTravel: shiftMetric(rep.kneeTravel),
-    depthConsistency: shiftMetric(rep.depthConsistency),
-    thoracicRounding: shiftMetric(rep.thoracicRounding),
-    hipRiseRate: shiftMetric(rep.hipRiseRate),
-    reversalControl: shiftMetric(rep.reversalControl),
-    stanceWidthShift: shiftMetric(rep.stanceWidthShift),
-    headPosition: shiftMetric(rep.headPosition),
-  }));
-}
-
 // ─── Trim Frames to Rep Range ───────────────────────────────────────────────
 
 export function trimFramesToReps(frames: PoseFrame[]): {
   frames: PoseFrame[];
   startTimestamp: number;
   endTimestamp: number;
-  trimStartIdx: number;
 } {
   if (frames.length === 0) {
-    return { frames, startTimestamp: 0, endTimestamp: 0, trimStartIdx: 0 };
+    return { frames, startTimestamp: 0, endTimestamp: 0 };
   }
 
   const reps = detectReps(frames);
@@ -1367,7 +1309,6 @@ export function trimFramesToReps(frames: PoseFrame[]): {
       frames,
       startTimestamp: frames[0].timestamp,
       endTimestamp: frames[frames.length - 1].timestamp,
-      trimStartIdx: 0,
     };
   }
 
@@ -1390,6 +1331,5 @@ export function trimFramesToReps(frames: PoseFrame[]): {
     frames: trimmedFrames,
     startTimestamp: frames[trimStart].timestamp,
     endTimestamp: frames[trimEnd].timestamp,
-    trimStartIdx: trimStart,
   };
 }
