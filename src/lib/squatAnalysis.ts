@@ -1207,7 +1207,7 @@ export function analyzeSquat(
     const maxY = Math.max(...hipYValues);
     const range = maxY - minY;
 
-    if (range < 0.01) {
+    if (range < 0.005) {
       throw new Error("Could not detect any squat reps. Make sure your video shows at least one full squat repetition.");
     }
 
