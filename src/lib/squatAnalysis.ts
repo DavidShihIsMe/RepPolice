@@ -1312,15 +1312,52 @@ export function analyzeSquat(
   };
 }
 
+// ─── Rebase Rep Indices ──────────────────────────────────────────────────────
+
+/** Shift all frame indices in reps so they are relative to a trimmed frames array. */
+export function rebaseReps(reps: RepData[], offset: number): RepData[] {
+  if (offset === 0) return reps;
+
+  function shiftMetric(m: MetricScore): MetricScore {
+    return { ...m, issueFrames: m.issueFrames.map((f) => f - offset) };
+  }
+
+  return reps.map((rep) => ({
+    ...rep,
+    startFrame: rep.startFrame - offset,
+    endFrame: rep.endFrame - offset,
+    bottomFrame: rep.bottomFrame - offset,
+    depth: shiftMetric(rep.depth),
+    kneeTracking: shiftMetric(rep.kneeTracking),
+    backAngle: shiftMetric(rep.backAngle),
+    barPath: shiftMetric(rep.barPath),
+    symmetry: shiftMetric(rep.symmetry),
+    buttWink: shiftMetric(rep.buttWink),
+    tempo: shiftMetric(rep.tempo),
+    heelRise: shiftMetric(rep.heelRise),
+    stanceWidth: shiftMetric(rep.stanceWidth),
+    hipShift: shiftMetric(rep.hipShift),
+    kneeValgus: shiftMetric(rep.kneeValgus),
+    kneeTravel: shiftMetric(rep.kneeTravel),
+    depthConsistency: shiftMetric(rep.depthConsistency),
+    thoracicRounding: shiftMetric(rep.thoracicRounding),
+    hipRiseRate: shiftMetric(rep.hipRiseRate),
+    reversalControl: shiftMetric(rep.reversalControl),
+    stanceWidthShift: shiftMetric(rep.stanceWidthShift),
+    headPosition: shiftMetric(rep.headPosition),
+  }));
+}
+
 // ─── Trim Frames to Rep Range ───────────────────────────────────────────────
 
 export function trimFramesToReps(frames: PoseFrame[]): {
   frames: PoseFrame[];
   startTimestamp: number;
   endTimestamp: number;
+  trimStartIdx: number;
 } {
   if (frames.length === 0) {
-    return { frames, startTimestamp: 0, endTimestamp: 0 };
+    return { frames, startTimestamp: 0, endTimestamp: 0, trimStartIdx: 0 };
   }
 
   const reps = detectReps(frames);
@@ -1330,6 +1367,7 @@ export function trimFramesToReps(frames: PoseFrame[]): {
       frames,
       startTimestamp: frames[0].timestamp,
       endTimestamp: frames[frames.length - 1].timestamp,
+      trimStartIdx: 0,
     };
   }
 
@@ -1352,5 +1390,6 @@ export function trimFramesToReps(frames: PoseFrame[]): {
     frames: trimmedFrames,
     startTimestamp: frames[trimStart].timestamp,
     endTimestamp: frames[trimEnd].timestamp,
+    trimStartIdx: trimStart,
   };
 }
