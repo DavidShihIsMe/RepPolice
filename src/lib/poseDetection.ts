@@ -412,12 +412,12 @@ function detectExerciseType(frames: PoseFrame[]): ExerciseType {
   const hipXRange = Math.max(...hipXValues) - Math.min(...hipXValues);
   const kneeAngleRange = kneeAngles.length > 0 ? Math.max(...kneeAngles) - Math.min(...kneeAngles) : 0;
 
-  // Squat: large hip Y range, small hip X range, large knee angle range
-  if (hipYRange > 0.15 && hipXRange < 0.08 && kneeAngleRange > 50) return "squat";
+  // Squat: meaningful hip Y range with knee bend
+  if (hipYRange > 0.1 && kneeAngleRange > 30) return "squat";
   // Deadlift: moderate hip Y range, more hip X movement, less knee bend
-  if (hipYRange > 0.08 && hipXRange > 0.05 && kneeAngleRange < 50) return "deadlift";
-  // If there's decent vertical movement, assume squat
-  if (hipYRange > 0.1) return "squat";
+  if (hipYRange > 0.08 && hipXRange > 0.05 && kneeAngleRange < 30) return "deadlift";
+  // If there's any meaningful vertical movement, assume squat (prefer false positive over rejection)
+  if (hipYRange > 0.05) return "squat";
 
   return "other";
 }
