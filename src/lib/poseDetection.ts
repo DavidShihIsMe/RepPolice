@@ -530,12 +530,9 @@ export async function processVideo(
     const cameraAngle = detectCameraAngle(frames);
     const exerciseType = detectExerciseType(frames);
 
-    // Gate on exercise type
-    if (exerciseType === "deadlift") {
-      throw new Error("This looks like a deadlift, not a squat. RepPolice currently only supports squat analysis. Deadlift support coming soon!");
-    }
-    if (exerciseType === "other") {
-      throw new Error("Could not identify this as a squat exercise. Make sure the video shows a clear squat movement with visible hip and knee flexion.");
+    // Log exercise type but don't gate — trust the user's upload
+    if (exerciseType !== "squat") {
+      console.warn(`[PoseDetection] Exercise type detected as "${exerciseType}", proceeding anyway`);
     }
 
     return {
