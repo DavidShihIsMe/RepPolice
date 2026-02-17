@@ -119,11 +119,11 @@ function detectReps(frames: PoseFrame[]): DetectedRep[] {
     return (lh.y + rh.y) / 2;
   });
 
-  // Smooth to reduce noise — wider window to avoid false peaks from jitter/bouncing
-  const smoothed = movingAverage(hipYValues, 7);
+  // Smooth to reduce noise
+  const smoothed = movingAverage(hipYValues, 5);
 
   // Find local maxima (bottom of squat = highest Y value in normalized coords)
-  const minProminence = 0.03; // minimum Y-change to qualify as a rep
+  const minProminence = 0.02; // minimum Y-change to qualify as a rep
   const rawBottoms: number[] = [];
 
   for (let i = 2; i < smoothed.length - 2; i++) {
@@ -134,13 +134,12 @@ function detectReps(frames: PoseFrame[]): DetectedRep[] {
       smoothed[i] > smoothed[i + 2]
     ) {
       // Check prominence: the peak should be meaningfully higher than surrounding valleys
-      // Look further out (30 frames) for better prominence estimation
       let leftMin = smoothed[i];
-      for (let j = i - 1; j >= Math.max(0, i - 30); j--) {
+      for (let j = i - 1; j >= Math.max(0, i - 15); j--) {
         leftMin = Math.min(leftMin, smoothed[j]);
       }
       let rightMin = smoothed[i];
-      for (let j = i + 1; j <= Math.min(smoothed.length - 1, i + 30); j++) {
+      for (let j = i + 1; j <= Math.min(smoothed.length - 1, i + 15); j++) {
         rightMin = Math.min(rightMin, smoothed[j]);
       }
       const prominence = smoothed[i] - Math.max(leftMin, rightMin);
@@ -150,8 +149,9 @@ function detectReps(frames: PoseFrame[]): DetectedRep[] {
     }
   }
 
-  // Merge peaks that are too close together (< 0.6s apart) — keep the deeper one
-  const minGapSeconds = 0.6;
+  // Merge peaks that are too close together (< 0.8s apart) — keep the deeper one
+  // This prevents a single rep with a pause/bounce at bottom from counting as two reps
+  const minGapSeconds = 0.8;
   const bottoms: number[] = [];
   for (let i = 0; i < rawBottoms.length; i++) {
     if (bottoms.length === 0) {
