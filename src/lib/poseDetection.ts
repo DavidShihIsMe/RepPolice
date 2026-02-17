@@ -1,7 +1,7 @@
 import type { Landmark, PoseFrame, PoseAnalysisResult, ProgressCallback, CameraAngle, ExerciseType } from "./types";
 import { POSE_LANDMARKS } from "./types";
 
-const CDN_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm";
+const CDN_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm";
 
 type PoseLandmarker = {
   detectForVideo: (
