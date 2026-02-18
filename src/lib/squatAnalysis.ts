@@ -1315,15 +1315,17 @@ export function trimFramesToReps(frames: PoseFrame[]): {
   const firstRep = reps[0];
   const lastRep = reps[reps.length - 1];
 
-  // Add ~2.5 seconds of buffer before first rep and after last rep
-  const BUFFER_SECONDS = 2.5;
+  // Add buffer before first rep and after last rep
+  const PRE_BUFFER_SECONDS = 2.5;
+  const POST_BUFFER_SECONDS = 1.0;
   const avgFrameDuration = frames.length > 1
     ? (frames[frames.length - 1].timestamp - frames[0].timestamp) / (frames.length - 1)
     : 1 / 30;
-  const bufferFrames = Math.ceil(BUFFER_SECONDS / avgFrameDuration);
+  const preBufferFrames = Math.ceil(PRE_BUFFER_SECONDS / avgFrameDuration);
+  const postBufferFrames = Math.ceil(POST_BUFFER_SECONDS / avgFrameDuration);
 
-  const trimStart = Math.max(0, firstRep.startFrame - bufferFrames);
-  const trimEnd = Math.min(frames.length - 1, lastRep.endFrame + bufferFrames);
+  const trimStart = Math.max(0, firstRep.startFrame - preBufferFrames);
+  const trimEnd = Math.min(frames.length - 1, lastRep.endFrame + postBufferFrames);
 
   const trimmedFrames = frames.slice(trimStart, trimEnd + 1);
 
