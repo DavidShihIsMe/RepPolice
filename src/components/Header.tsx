@@ -17,6 +17,9 @@ export default async function Header() {
         </Link>
 
         <nav className="flex items-center gap-5 text-sm">
+          <Link href="/lab" className="text-gray-400 hover:text-white transition-colors">
+            Lab
+          </Link>
           {user ? (
             <>
               <Link

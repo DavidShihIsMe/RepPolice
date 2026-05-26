@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { VIDEOS_BUCKET } from "@/lib/constants";
 import type { Submission } from "@/lib/types";
+import VideoPlayer from "./VideoPlayer";
 
 function formatBytes(n: number | null): string {
   if (!n) return "—";
@@ -55,28 +56,12 @@ export default async function SubmissionDetail({
       </p>
 
       {signed?.signedUrl ? (
-        <video
-          src={signed.signedUrl}
-          controls
-          playsInline
-          className="w-full rounded-2xl border border-border bg-black aspect-video"
-        />
+        <VideoPlayer src={signed.signedUrl} />
       ) : (
         <div className="rounded-2xl border border-border bg-surface px-6 py-12 text-center text-sm text-gray-400">
           Could not load video.
         </div>
       )}
-
-      <div className="mt-8 rounded-2xl border border-border bg-surface p-5">
-        <h2 className="text-sm font-semibold mb-3">Analysis</h2>
-        <p className="text-sm text-gray-400">
-          Form analysis is coming in the next phase. For now, your video is
-          safely stored and ready for review.
-        </p>
-        <p className="text-xs text-gray-600 mt-3">
-          Status: <span className="text-gray-400">{s.status}</span>
-        </p>
-      </div>
     </div>
   );
 }
