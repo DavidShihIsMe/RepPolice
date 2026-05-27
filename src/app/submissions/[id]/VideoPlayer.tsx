@@ -5,7 +5,29 @@ import { useCallback, useRef, useState } from "react";
 import type { Pose } from "@/lib/pose/types";
 import { sampleFromPose } from "@/lib/squat/samples";
 import { analyze } from "@/lib/squat/reps";
-import type { AnalysisResult, FrameSample, Rep } from "@/lib/squat/types";
+import type {
+  AnalysisResult,
+  ButtWinkLabel,
+  DepthLabel,
+  FrameSample,
+  HipRiseLabel,
+  HipShiftLabel,
+  LeanLabel,
+  Rep,
+  SymmetryLabel,
+  TempoLabel,
+  ThoracicLabel,
+  ValgusLabel,
+  View,
+} from "@/lib/squat/types";
+
+type Severity = "good" | "warn" | "bad";
+
+interface RepChip {
+  label: string; // short criterion name
+  value: string; // formatted measurement
+  severity: Severity;
+}
 
 // MediaPipe/WebGL load only in the browser.
 const PoseOverlay = dynamic(() => import("@/components/PoseOverlay"), {
@@ -189,34 +211,52 @@ function ReportCard({
   result: AnalysisResult;
   onJump: (t: number) => void;
 }) {
-  const { reps, durationS } = result;
-  const counts = reps.reduce(
-    (acc, r) => {
-      acc[r.depthLabel]++;
-      return acc;
-    },
-    { above: 0, parallel: 0, below: 0 }
+  const { reps, durationS, view } = result;
+  const chipsPerRep = reps.map((r) => chipsForRep(r, view));
+  const highRiskCount = chipsPerRep.reduce(
+    (acc, chips) => acc + chips.filter((c) => c.severity === "bad").length,
+    0
   );
 
   return (
     <div className="rounded-2xl border border-border bg-surface overflow-hidden">
-      <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-4">
-        <div>
-          <p className="text-xs uppercase tracking-wider text-gray-500 mb-1">
-            Result
-          </p>
+      <div className="px-5 py-4 border-b border-border flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <p className="text-xs uppercase tracking-wider text-gray-500">
+              Result
+            </p>
+            <ViewBadge view={view} />
+          </div>
           <h3 className="text-xl font-semibold">
             {reps.length} {reps.length === 1 ? "rep" : "reps"}
           </h3>
         </div>
-        <div className="flex items-center gap-2 text-xs">
-          <DepthChip label="below" count={counts.below} />
-          <DepthChip label="parallel" count={counts.parallel} />
-          <DepthChip label="above" count={counts.above} />
+        <div className="text-xs text-right pt-1">
+          {highRiskCount > 0 ? (
+            <span className="text-red-300">
+              {highRiskCount} high-risk issue{highRiskCount === 1 ? "" : "s"}
+            </span>
+          ) : reps.length > 0 ? (
+            <span className="text-green-300">No high-risk issues</span>
+          ) : null}
         </div>
       </div>
 
-      {/* Timeline strip */}
+      {view === "front" && (
+        <div className="px-5 py-3 border-b border-border bg-accent/5 text-xs text-gray-300">
+          Front view detected. Showing knee tracking, hip shift, and symmetry
+          grades — depth and forward lean require a side angle.
+        </div>
+      )}
+      {view === "unclear" && (
+        <div className="px-5 py-3 border-b border-border bg-yellow-500/5 text-xs text-yellow-200/80">
+          Couldn&apos;t tell if this is a clean side or front view. Grades shown
+          below may be unreliable — for best results, film perpendicular to the lifter.
+        </div>
+      )}
+
+      {/* Timeline strip — depth-colored (most visually meaningful single signal) */}
       <div className="px-5 py-4 border-b border-border">
         <div className="relative h-8 bg-border/50 rounded-md">
           {reps.map((r) => {
@@ -226,7 +266,7 @@ function ReportCard({
                 key={r.index}
                 type="button"
                 onClick={() => onJump(r.bottomT)}
-                title={`Rep ${r.index} — ${r.depthLabel}`}
+                title={`Rep ${r.index}`}
                 className={`absolute top-1 bottom-1 w-2 rounded-sm transition-transform hover:scale-y-110 hover:w-2.5 ${depthBg(r.depthLabel)}`}
                 style={{ left: `calc(${left}% - 4px)` }}
               />
@@ -239,29 +279,26 @@ function ReportCard({
         </div>
       </div>
 
-      {/* Per-rep table */}
+      {/* Per-rep rows */}
       <ul className="divide-y divide-border">
-        {reps.map((r) => (
+        {reps.map((r, i) => (
           <li key={r.index}>
             <button
               type="button"
               onClick={() => onJump(r.bottomT)}
-              className="w-full flex items-center justify-between gap-4 px-5 py-3 hover:bg-surface-light transition-colors text-left"
+              className="w-full flex items-start justify-between gap-4 px-5 py-3 hover:bg-surface-light transition-colors text-left"
             >
-              <div className="flex items-center gap-4 min-w-0">
-                <span className="text-xs text-gray-500 w-8 flex-shrink-0 tabular-nums">
+              <div className="flex items-start gap-4 min-w-0 flex-1">
+                <span className="text-xs text-gray-500 w-8 flex-shrink-0 tabular-nums pt-1">
                   #{r.index}
                 </span>
-                <span
-                  className={`text-[10px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded-full border ${depthChipStyles(r.depthLabel)}`}
-                >
-                  {r.depthLabel}
-                </span>
-                <span className="text-xs text-gray-500 tabular-nums">
-                  depth {formatDepth(r.depth)}
-                </span>
+                <div className="flex flex-wrap gap-1.5 min-w-0">
+                  {chipsPerRep[i].map((c) => (
+                    <Chip key={c.label} chip={c} />
+                  ))}
+                </div>
               </div>
-              <span className="text-xs text-gray-500 tabular-nums flex-shrink-0">
+              <span className="text-xs text-gray-500 tabular-nums flex-shrink-0 pt-1">
                 {formatTime(r.bottomT)}
               </span>
             </button>
@@ -272,35 +309,199 @@ function ReportCard({
   );
 }
 
-function DepthChip({
-  label,
-  count,
-}: {
-  label: "above" | "parallel" | "below";
-  count: number;
-}) {
-  if (count === 0) return null;
+// ---- Chip builders ----
+
+function chipsForRep(r: Rep, view: View): RepChip[] {
+  // Unclear view falls back to the side-view chip set as a best guess.
+  if (view === "front") return frontChips(r);
+  return sideChips(r);
+}
+
+function sideChips(r: Rep): RepChip[] {
+  return [
+    { label: "Depth", value: formatDepth(r.depth), severity: depthSeverity(r.depthLabel) },
+    { label: "Lean", value: `${r.leanDeg.toFixed(0)}°`, severity: leanSeverity(r.leanLabel) },
+    { label: "Tempo", value: `${r.tempoS.toFixed(1)}s`, severity: tempoSeverity(r.tempoLabel) },
+    {
+      label: "Wink",
+      value: `${r.buttWinkDeg.toFixed(0)}°`,
+      severity: buttWinkSeverity(r.buttWinkLabel),
+    },
+    {
+      label: "Round",
+      value: `${r.thoracicDeg.toFixed(0)}°`,
+      severity: thoracicSeverity(r.thoracicLabel),
+    },
+    {
+      label: "Rise",
+      value: `${r.hipRiseRatio.toFixed(2)}×`,
+      severity: hipRiseSeverity(r.hipRiseLabel),
+    },
+  ];
+}
+
+function frontChips(r: Rep): RepChip[] {
+  return [
+    {
+      label: "Valgus",
+      value: `${r.valgusDeg.toFixed(0)}°`,
+      severity: valgusSeverity(r.valgusLabel),
+    },
+    {
+      label: "Shift",
+      value: `${(r.hipShiftPct * 100).toFixed(0)}%`,
+      severity: hipShiftSeverity(r.hipShiftLabel),
+    },
+    {
+      label: "Symm",
+      value: `${(r.symmetryPct * 100).toFixed(1)}%`,
+      severity: symmetrySeverity(r.symmetryLabel),
+    },
+    {
+      label: "Rise",
+      value: `${r.hipRiseRatio.toFixed(2)}×`,
+      severity: hipRiseSeverity(r.hipRiseLabel),
+    },
+  ];
+}
+
+// ---- Chip + severity helpers ----
+
+function Chip({ chip }: { chip: RepChip }) {
   return (
     <span
-      className={`px-2 py-0.5 rounded-full border ${depthChipStyles(label)}`}
+      className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border tabular-nums ${severityStyles(chip.severity)}`}
     >
-      {count} {label}
+      <span className="uppercase tracking-wider opacity-70 mr-1">{chip.label}</span>
+      {chip.value}
     </span>
   );
 }
 
-function depthChipStyles(label: Rep["depthLabel"]): string {
-  switch (label) {
-    case "below":
+function severityStyles(s: Severity): string {
+  switch (s) {
+    case "good":
       return "bg-green-500/15 text-green-300 border-green-500/30";
-    case "parallel":
+    case "warn":
+      return "bg-yellow-500/15 text-yellow-300 border-yellow-500/30";
+    case "bad":
+      return "bg-red-500/15 text-red-300 border-red-500/30";
+  }
+}
+
+function depthSeverity(l: DepthLabel): Severity {
+  // Below parallel and at parallel are both fine. Above-parallel is the failure.
+  return l === "above" ? "bad" : "good";
+}
+
+function leanSeverity(l: LeanLabel): Severity {
+  switch (l) {
+    case "upright":
+      return "good";
+    case "moderate":
+      return "warn";
+    case "excessive":
+      return "bad";
+  }
+}
+
+function tempoSeverity(l: TempoLabel): Severity {
+  switch (l) {
+    case "controlled":
+      return "good";
+    case "slow":
+      return "warn";
+    case "divebomb":
+      return "bad";
+  }
+}
+
+function buttWinkSeverity(l: ButtWinkLabel): Severity {
+  switch (l) {
+    case "none":
+      return "good";
+    case "mild":
+      return "warn";
+    case "severe":
+      return "bad";
+  }
+}
+
+function thoracicSeverity(l: ThoracicLabel): Severity {
+  switch (l) {
+    case "neutral":
+      return "good";
+    case "rounded":
+      return "warn";
+    case "excessive":
+      return "bad";
+  }
+}
+
+function hipRiseSeverity(l: HipRiseLabel): Severity {
+  switch (l) {
+    case "balanced":
+      return "good";
+    case "chest_first":
+      return "warn";
+    case "good_morning":
+      return "bad";
+  }
+}
+
+function valgusSeverity(l: ValgusLabel): Severity {
+  switch (l) {
+    case "tracking":
+      return "good";
+    case "mild_cave":
+      return "warn";
+    case "severe_cave":
+      return "bad";
+  }
+}
+
+function hipShiftSeverity(l: HipShiftLabel): Severity {
+  return l === "stable" ? "good" : "warn";
+}
+
+function symmetrySeverity(l: SymmetryLabel): Severity {
+  switch (l) {
+    case "balanced":
+      return "good";
+    case "asymmetric":
+      return "warn";
+    case "severe":
+      return "bad";
+  }
+}
+
+function ViewBadge({ view }: { view: View }) {
+  const labels: Record<View, string> = {
+    side: "Side view",
+    front: "Front view",
+    unclear: "Angle unclear",
+  };
+  return (
+    <span
+      className={`text-[10px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded-full border ${viewBadgeStyles(view)}`}
+    >
+      {labels[view]}
+    </span>
+  );
+}
+
+function viewBadgeStyles(view: View): string {
+  switch (view) {
+    case "side":
+      return "bg-green-500/15 text-green-300 border-green-500/30";
+    case "front":
       return "bg-accent/15 text-accent border-accent/30";
-    case "above":
+    case "unclear":
       return "bg-yellow-500/15 text-yellow-300 border-yellow-500/30";
   }
 }
 
-function depthBg(label: Rep["depthLabel"]): string {
+function depthBg(label: DepthLabel): string {
   switch (label) {
     case "below":
       return "bg-green-400";
@@ -319,7 +520,6 @@ function formatTime(s: number): string {
 }
 
 function formatDepth(d: number): string {
-  // Render as percentage of body height. Positive = below parallel.
   const sign = d > 0 ? "+" : "";
   return `${sign}${(d * 100).toFixed(0)}%`;
 }
