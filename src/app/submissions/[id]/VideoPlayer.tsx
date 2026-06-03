@@ -1,15 +1,13 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useRef, useState } from "react";
-import type { Pose } from "@/lib/pose/types";
-import { sampleFromPose } from "@/lib/squat/samples";
-import { analyze } from "@/lib/squat/reps";
+import { useRef, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
+import { analyzeVideoSrc } from "@/lib/squat/runner";
 import type {
   AnalysisResult,
   ButtWinkLabel,
   DepthLabel,
-  FrameSample,
   HipRiseLabel,
   HipShiftLabel,
   LeanLabel,
@@ -42,79 +40,70 @@ const PoseOverlay = dynamic(() => import("@/components/PoseOverlay"), {
 type AnalyzeState =
   | { kind: "idle" }
   | { kind: "running"; pct: number }
-  | { kind: "done"; result: AnalysisResult }
   | { kind: "error"; message: string };
 
-// How fast to drive playback during analysis. Most modern browsers handle
-// 8x for typical phone-resolution clips; we cap there to keep MediaPipe
-// from missing frames.
-const ANALYZE_PLAYBACK_RATE = 8;
+// Pad applied around the rep window when clipping playback. Gives a beat of
+// stance/setup before the first descent and a beat of recovery after the last.
+const CLIP_PAD_S = 1;
 
-export default function VideoPlayer({ src }: { src: string }) {
+export default function VideoPlayer({
+  src,
+  submissionId,
+  analysis: initialAnalysis,
+}: {
+  src: string;
+  submissionId: string;
+  analysis: AnalysisResult | null;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const samplesRef = useRef<FrameSample[]>([]);
+  const [analysis, setAnalysis] = useState<AnalysisResult | null>(initialAnalysis);
   const [analyzeState, setAnalyzeState] = useState<AnalyzeState>({ kind: "idle" });
-  const isCapturingRef = useRef(false);
 
-  const onPose = useCallback((pose: Pose | null, tSec: number) => {
-    if (!isCapturingRef.current || !pose) return;
-    const sample = sampleFromPose(pose, tSec);
-    if (sample) samplesRef.current.push(sample);
-  }, []);
+  const hasReps = !!analysis && analysis.reps.length > 0;
+  // Clip window: pad CLIP_PAD_S either side of the rep span, clamped to the
+  // video's duration. The original full file stays in storage; we just don't
+  // play the clutter.
+  const clipStart = hasReps
+    ? Math.max(0, analysis!.reps[0].startT - CLIP_PAD_S)
+    : undefined;
+  const clipEnd = hasReps
+    ? Math.min(analysis!.durationS, analysis!.reps[analysis!.reps.length - 1].endT + CLIP_PAD_S)
+    : undefined;
 
-  function finishAnalysis() {
-    const video = videoRef.current;
-    if (!video) return;
-    isCapturingRef.current = false;
-    video.playbackRate = 1;
-    video.pause();
-    const result = analyze(samplesRef.current, video.duration || 0);
-    if (result.reps.length === 0) {
-      setAnalyzeState({
-        kind: "error",
-        message:
-          result.framesUsable < 30
-            ? "Couldn't see enough of the body to analyze. Re-shoot with the full body in frame from the side."
-            : "No reps detected. Make sure the video shows a full squat or two.",
-      });
-    } else {
-      setAnalyzeState({ kind: "done", result });
-    }
-  }
-
-  async function startAnalysis() {
-    const video = videoRef.current;
-    if (!video) return;
-
-    samplesRef.current = [];
+  async function runAnalysis() {
     setAnalyzeState({ kind: "running", pct: 0 });
-    isCapturingRef.current = true;
-
-    video.playbackRate = ANALYZE_PLAYBACK_RATE;
-    video.currentTime = 0;
-
-    const onTime = () => {
-      if (!video.duration || Number.isNaN(video.duration)) return;
-      const pct = Math.min(100, (video.currentTime / video.duration) * 100);
-      setAnalyzeState((s) => (s.kind === "running" ? { kind: "running", pct } : s));
-    };
-    const onEnded = () => {
-      video.removeEventListener("timeupdate", onTime);
-      video.removeEventListener("ended", onEnded);
-      finishAnalysis();
-    };
-    video.addEventListener("timeupdate", onTime);
-    video.addEventListener("ended", onEnded);
-
     try {
-      await video.play();
+      const result = await analyzeVideoSrc(src, {
+        onProgress: (pct) =>
+          setAnalyzeState({ kind: "running", pct: pct * 100 }),
+      });
+      // Persist on the row. If RLS rejects (rare — auth expired) we still
+      // surface the result to the user; the warning lets us debug later.
+      const supabase = createClient();
+      const { error } = await supabase
+        .from("submissions")
+        .update({ analysis: result })
+        .eq("id", submissionId);
+      if (error) {
+        // eslint-disable-next-line no-console
+        console.warn("Could not persist analysis", error);
+      }
+      setAnalysis(result);
+      setAnalyzeState({ kind: "idle" });
+      if (result.reps.length === 0) {
+        // eslint-disable-next-line no-console
+        console.warn("Analysis returned 0 reps", {
+          framesProcessed: result.framesProcessed,
+          framesUsable: result.framesUsable,
+          durationS: result.durationS,
+          view: result.view,
+          viewRatio: result.viewRatio,
+        });
+      }
     } catch (e) {
-      isCapturingRef.current = false;
-      video.removeEventListener("timeupdate", onTime);
-      video.removeEventListener("ended", onEnded);
       setAnalyzeState({
         kind: "error",
-        message: e instanceof Error ? e.message : "Could not start playback.",
+        message: e instanceof Error ? e.message : "Analysis failed.",
       });
     }
   }
@@ -132,14 +121,18 @@ export default function VideoPlayer({ src }: { src: string }) {
         videoElementRef={videoRef}
         src={src}
         label="MediaPipe Pose (Full)"
-        onPose={onPose}
+        clipStart={clipStart}
+        clipEnd={clipEnd}
       />
 
-      <AnalyzeBar state={analyzeState} onStart={startAnalysis} />
+      <AnalyzeBar
+        state={analyzeState}
+        onStart={runAnalysis}
+        hasResult={hasReps}
+        emptyResult={!!analysis && analysis.reps.length === 0}
+      />
 
-      {analyzeState.kind === "done" && (
-        <ReportCard result={analyzeState.result} onJump={jumpTo} />
-      )}
+      {hasReps && <ReportCard result={analysis!} onJump={jumpTo} />}
     </div>
   );
 }
@@ -147,9 +140,13 @@ export default function VideoPlayer({ src }: { src: string }) {
 function AnalyzeBar({
   state,
   onStart,
+  hasResult,
+  emptyResult,
 }: {
   state: AnalyzeState;
   onStart: () => void;
+  hasResult: boolean;
+  emptyResult: boolean;
 }) {
   if (state.kind === "running") {
     return (
@@ -164,28 +161,28 @@ function AnalyzeBar({
             style={{ width: `${state.pct}%` }}
           />
         </div>
-        <p className="text-xs text-gray-500 mt-2">
-          Playing at {ANALYZE_PLAYBACK_RATE}× to capture landmarks.
-        </p>
       </div>
     );
   }
 
-  const buttonLabel =
-    state.kind === "done"
-      ? "Re-analyze"
-      : state.kind === "error"
-        ? "Try again"
-        : "Analyze";
+  const buttonLabel = hasResult
+    ? "Re-analyze"
+    : state.kind === "error"
+      ? "Try again"
+      : "Analyze";
+
+  const description = hasResult
+    ? "Re-run the form analysis on this video. Replaces the stored result."
+    : emptyResult
+      ? "Previous analysis found no reps. Try again — maybe the camera angle was off."
+      : "Detect reps and measure depth, lean, tempo, and other form criteria.";
 
   return (
     <div className="rounded-2xl border border-border bg-surface p-4">
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold mb-0.5">Form analysis</h2>
-          <p className="text-xs text-gray-500">
-            Plays the video back at {ANALYZE_PLAYBACK_RATE}× to detect reps and measure depth.
-          </p>
+          <p className="text-xs text-gray-500">{description}</p>
         </div>
         <button
           type="button"
@@ -213,6 +210,10 @@ function ReportCard({
 }) {
   const { reps, durationS, view } = result;
   const chipsPerRep = reps.map((r) => chipsForRep(r, view));
+  const scoresPerRep = chipsPerRep.map(scoreFromChips);
+  const overallScore = scoresPerRep.length
+    ? Math.round(scoresPerRep.reduce((a, b) => a + b, 0) / scoresPerRep.length)
+    : 0;
   const highRiskCount = chipsPerRep.reduce(
     (acc, chips) => acc + chips.filter((c) => c.severity === "bad").length,
     0
@@ -231,15 +232,22 @@ function ReportCard({
           <h3 className="text-xl font-semibold">
             {reps.length} {reps.length === 1 ? "rep" : "reps"}
           </h3>
-        </div>
-        <div className="text-xs text-right pt-1">
           {highRiskCount > 0 ? (
-            <span className="text-red-300">
+            <p className="text-xs text-red-300 mt-1">
               {highRiskCount} high-risk issue{highRiskCount === 1 ? "" : "s"}
-            </span>
+            </p>
           ) : reps.length > 0 ? (
-            <span className="text-green-300">No high-risk issues</span>
+            <p className="text-xs text-green-300 mt-1">No high-risk issues</p>
           ) : null}
+        </div>
+        <div className="text-right">
+          <p className="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">
+            Score
+          </p>
+          <p className={`text-3xl font-bold tabular-nums ${scoreColor(overallScore)}`}>
+            {overallScore}
+            <span className="text-base text-gray-500 font-normal">/100</span>
+          </p>
         </div>
       </div>
 
@@ -298,15 +306,46 @@ function ReportCard({
                   ))}
                 </div>
               </div>
-              <span className="text-xs text-gray-500 tabular-nums flex-shrink-0 pt-1">
-                {formatTime(r.bottomT)}
-              </span>
+              <div className="flex items-center gap-3 flex-shrink-0 pt-0.5">
+                <span className={`text-sm font-semibold tabular-nums ${scoreColor(scoresPerRep[i])}`}>
+                  {scoresPerRep[i]}
+                </span>
+                <span className="text-xs text-gray-500 tabular-nums">
+                  {formatTime(r.bottomT)}
+                </span>
+              </div>
             </button>
           </li>
         ))}
       </ul>
     </div>
   );
+}
+
+// ---- Scoring ----
+
+// Calibrated so a typical squat (a few minor warns, one big issue) lands at
+// ~85, a clean squat lands at 90+, and a perfect rep stays at 100.
+//   warn  → −3 (borderline / moderate-severity criterion)
+//   bad   → −8 (high-severity criterion — depth fail, divebomb, severe wink, etc.)
+//   floor 30 so a brutal rep is still a number, not zero.
+const WARN_PENALTY = 3;
+const BAD_PENALTY = 8;
+const MIN_SCORE = 30;
+
+function scoreFromChips(chips: RepChip[]): number {
+  let score = 100;
+  for (const c of chips) {
+    if (c.severity === "warn") score -= WARN_PENALTY;
+    else if (c.severity === "bad") score -= BAD_PENALTY;
+  }
+  return Math.max(MIN_SCORE, Math.min(100, score));
+}
+
+function scoreColor(n: number): string {
+  if (n >= 90) return "text-green-300";
+  if (n >= 80) return "text-yellow-300";
+  return "text-red-300";
 }
 
 // ---- Chip builders ----

@@ -33,6 +33,22 @@ const MIN_PROMINENCE_RATIO = 0.1;
 // Typical squat rep is 2–4s; 0.5s is well below that and well above bounce.
 const MIN_REP_SEPARATION_S = 0.5;
 
+// A real squat rep (descent + recovery) takes ≥ this long. Filters out tiny
+// dips during setup/walking that happen to pass the prominence filter.
+const MIN_REP_DURATION_S = 0.8;
+
+// Standing position estimation: median of the lowest-decile of hipY values.
+// "Lowest" = smallest y = body upright. The decile is large enough to be
+// stable across noise but small enough that mostly-squatting videos still
+// pick out the standing frames specifically.
+const STANDING_DECILE = 0.1;
+
+// Tolerance band around the standing baseline. Frames with hipY within
+// (baseline + STANDING_BAND_RATIO * bodyHeight) are considered "still
+// standing" — covers ankle bob, slight sway, walking. Real reps go well
+// past this (≥ MIN_PROMINENCE_RATIO = 10% body height).
+const STANDING_BAND_RATIO = 0.03;
+
 // Depth thresholds — fraction of body height, applied to (hipY − kneeY) at bottom.
 const DEPTH_PARALLEL_BAND = 0.02; // ±2% of body height = "parallel"
 
@@ -260,7 +276,9 @@ function computeSymmetry(
 }
 
 // We need a minimum of data before attempting analysis.
-const MIN_VISIBLE_SAMPLES = 30;
+// With 2× playback and ~15 samples/video-second, a 1s rep gives ~15 samples
+// — so 15 is the floor for any meaningful analysis at all.
+const MIN_VISIBLE_SAMPLES = 15;
 
 function median(xs: number[]): number {
   if (xs.length === 0) return 0;
@@ -300,6 +318,44 @@ function prominence(y: number[], peakIdx: number): number {
     if (y[i] < rightMin) rightMin = y[i];
   }
   return h - Math.max(leftMin, rightMin);
+}
+
+// Median of the lowest fraction of values — used to estimate the lifter's
+// upright (standing) hipY across the whole trajectory. Robust to clutter
+// at start/end of the clip because clutter frames mostly *are* standing.
+function lowestDecileMedian(values: number[], fraction: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const n = Math.max(1, Math.floor(sorted.length * fraction));
+  return median(sorted.slice(0, n));
+}
+
+// For a known rep bottom, find the START frame: walking back in time, the
+// first sample where hipY drops into the standing band. Bounded by the
+// previous bottom (so adjacent reps don't share a start).
+function findDescentStart(
+  y: number[],
+  bottomIdx: number,
+  prevBound: number,
+  standingThreshold: number
+): number {
+  for (let j = bottomIdx; j >= prevBound; j--) {
+    if (y[j] <= standingThreshold) return j;
+  }
+  return -1; // never returned to standing → incomplete (video starts mid-descent)
+}
+
+// Same logic forward in time → END frame (recovery complete).
+function findAscentEnd(
+  y: number[],
+  bottomIdx: number,
+  nextBound: number,
+  standingThreshold: number
+): number {
+  for (let j = bottomIdx; j <= nextBound; j++) {
+    if (y[j] <= standingThreshold) return j;
+  }
+  return -1; // ascent never returned to standing → incomplete (video ends mid-rep)
 }
 
 // Non-maximum suppression by time: of peaks within minSep seconds of each
@@ -364,19 +420,29 @@ export function analyze(samples: FrameSample[], durationS: number): AnalysisResu
   const prominentPeaks = candidates.filter((p) => prominence(y, p) >= minProm);
   const bottoms = nmsByTime(prominentPeaks, y, ts, MIN_REP_SEPARATION_S);
 
-  // Build Rep objects. The rep's start/end are the lowest-y (highest hip)
-  // sample in the window between this bottom and the neighboring bottom.
+  // Estimate the lifter's standing hipY across the entire trajectory.
+  // The lowest decile of hipY values represents upright frames — robust to
+  // both clutter at start/end (which is mostly upright) and number of reps.
+  const standingBaseline = lowestDecileMedian(y, STANDING_DECILE);
+  const standingThreshold = standingBaseline + STANDING_BAND_RATIO * bodyHeight;
+
+  // Build Rep objects. Start/end are anchored to the standing band — the
+  // frame where the lifter leaves / returns to upright. This excludes any
+  // walking-around clutter and gives accurate eccentric/concentric windows.
   const reps: Rep[] = [];
   for (let i = 0; i < bottoms.length; i++) {
     const p = bottoms[i];
     const prevBound = i > 0 ? bottoms[i - 1] : 0;
     const nextBound = i < bottoms.length - 1 ? bottoms[i + 1] : y.length - 1;
 
-    let startIdx = prevBound;
-    for (let j = prevBound; j < p; j++) if (y[j] < y[startIdx]) startIdx = j;
-
-    let endIdx = nextBound;
-    for (let j = p; j <= nextBound; j++) if (y[j] < y[endIdx]) endIdx = j;
+    const startIdx = findDescentStart(y, p, prevBound, standingThreshold);
+    const endIdx = findAscentEnd(y, p, nextBound, standingThreshold);
+    // Skip incomplete reps: descent begins before the clip OR ascent
+    // never returns to standing. These would give bogus tempo / lean / etc.
+    if (startIdx < 0 || endIdx < 0) continue;
+    // Drop tiny dips that survived prominence filtering — setup motion,
+    // adjusting the bar, etc. A real squat takes at least MIN_REP_DURATION_S.
+    if (ts[endIdx] - ts[startIdx] < MIN_REP_DURATION_S) continue;
 
     // Use the *unsmoothed* sample at the bottom for the depth metric.
     const bottomSample = visible[p];

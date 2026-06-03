@@ -56,7 +56,11 @@ export default async function SubmissionDetail({
       </p>
 
       {signed?.signedUrl ? (
-        <VideoPlayer src={signed.signedUrl} />
+        <VideoPlayer
+          src={signed.signedUrl}
+          submissionId={s.id}
+          analysis={s.analysis}
+        />
       ) : (
         <div className="rounded-2xl border border-border bg-surface px-6 py-12 text-center text-sm text-gray-400">
           Could not load video.

@@ -3,6 +3,8 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { analyzeVideoSrc } from "@/lib/squat/runner";
+import type { AnalysisResult } from "@/lib/squat/types";
 import {
   ALLOWED_EXTENSIONS,
   ALLOWED_MIME_TYPES,
@@ -10,7 +12,14 @@ import {
   VIDEOS_BUCKET,
 } from "@/lib/constants";
 
-type Status = "idle" | "validating" | "uploading" | "saving" | "done" | "error";
+type Status =
+  | "idle"
+  | "validating"
+  | "analyzing"
+  | "uploading"
+  | "saving"
+  | "done"
+  | "error";
 
 function getExtension(name: string): string {
   const idx = name.lastIndexOf(".");
@@ -90,16 +99,34 @@ export default function UploadForm({ userId }: { userId: string }) {
   async function startUpload() {
     if (!file) return;
     setError(null);
-    setStatus("uploading");
     setProgress(0);
 
     const supabase = createClient();
+    const blobUrl = URL.createObjectURL(file);
 
     try {
       const {
         data: { session },
       } = await supabase.auth.getSession();
       if (!session) throw new Error("Not signed in.");
+
+      // Phase 1: analyze the local file. Failure here is non-fatal — we still
+      // upload, just without analysis attached, and the user can click
+      // Re-analyze on the submission page.
+      setStatus("analyzing");
+      let analysis: AnalysisResult | null = null;
+      try {
+        analysis = await analyzeVideoSrc(blobUrl, {
+          onProgress: (p) => setProgress(p),
+        });
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("Pre-upload analysis failed; continuing without it.", e);
+      }
+
+      // Phase 2: storage upload.
+      setStatus("uploading");
+      setProgress(0);
 
       const submissionId = crypto.randomUUID();
       const ext = getExtension(file.name) || ".mp4";
@@ -109,6 +136,7 @@ export default function UploadForm({ userId }: { userId: string }) {
       const objectUrl = `${baseUrl}/storage/v1/object/${VIDEOS_BUCKET}/${storagePath}`;
       await uploadXhr(objectUrl, session.access_token, file);
 
+      // Phase 3: row insert (with analysis if we got one).
       setStatus("saving");
       const { error: insertErr } = await supabase.from("submissions").insert({
         id: submissionId,
@@ -118,20 +146,37 @@ export default function UploadForm({ userId }: { userId: string }) {
         file_size_bytes: file.size,
         mime_type: file.type || null,
         status: "uploaded",
+        analysis,
       });
       if (insertErr) throw insertErr;
 
       setStatus("done");
-      router.push("/submissions");
+      router.push(`/submissions/${submissionId}`);
       router.refresh();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Upload failed.";
+      // Supabase errors are plain objects with .message (not Error instances),
+      // so check for that shape too. Falls back to JSON.stringify so nothing
+      // ever silently swallows the cause.
+      let msg = "Upload failed.";
+      if (e instanceof Error) {
+        msg = e.message;
+      } else if (typeof e === "object" && e !== null) {
+        const obj = e as { message?: string };
+        msg = obj.message || JSON.stringify(e);
+      } else if (typeof e === "string") {
+        msg = e;
+      }
+      // eslint-disable-next-line no-console
+      console.error("Upload error:", e);
       setError(msg);
       setStatus("error");
+    } finally {
+      URL.revokeObjectURL(blobUrl);
     }
   }
 
-  const isWorking = status === "uploading" || status === "saving";
+  const isWorking =
+    status === "analyzing" || status === "uploading" || status === "saving";
   const pct = Math.round(progress * 100);
 
   return (
@@ -194,15 +239,33 @@ export default function UploadForm({ userId }: { userId: string }) {
       {isWorking && (
         <div>
           <div className="flex items-center justify-between text-xs text-gray-400 mb-1.5">
-            <span>{status === "uploading" ? "Uploading…" : "Saving…"}</span>
-            <span>{status === "uploading" ? `${pct}%` : ""}</span>
+            <span>
+              {status === "analyzing"
+                ? "Analyzing form…"
+                : status === "uploading"
+                  ? "Uploading…"
+                  : "Saving…"}
+            </span>
+            <span>
+              {status === "analyzing" || status === "uploading" ? `${pct}%` : ""}
+            </span>
           </div>
           <div className="w-full h-1.5 bg-border rounded-full overflow-hidden">
             <div
               className="h-full bg-accent transition-[width] duration-150"
-              style={{ width: status === "uploading" ? `${pct}%` : "100%" }}
+              style={{
+                width:
+                  status === "analyzing" || status === "uploading"
+                    ? `${pct}%`
+                    : "100%",
+              }}
             />
           </div>
+          {status === "analyzing" && (
+            <p className="text-[11px] text-gray-500 mt-2">
+              Detecting reps before upload — runs locally in your browser.
+            </p>
+          )}
         </div>
       )}
 
@@ -219,7 +282,13 @@ export default function UploadForm({ userId }: { userId: string }) {
           disabled={!file || isWorking}
           className="px-5 py-2.5 bg-accent text-black font-semibold rounded-lg hover:bg-accent-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {status === "uploading" ? "Uploading…" : status === "saving" ? "Saving…" : "Upload"}
+          {status === "analyzing"
+            ? "Analyzing…"
+            : status === "uploading"
+              ? "Uploading…"
+              : status === "saving"
+                ? "Saving…"
+                : "Upload"}
         </button>
         {file && !isWorking && (
           <button

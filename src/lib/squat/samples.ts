@@ -14,7 +14,12 @@ const RIGHT_KNEE = 26;
 const LEFT_ANKLE = 27;
 const RIGHT_ANKLE = 28;
 
-const VISIBILITY_THRESHOLD = 0.4;
+// Per-keypoint raw visibility floor for accepting a sample. MediaPipe's
+// scores for partially-occluded joints (e.g., far ankle in side view) commonly
+// sit in the 0.25–0.40 range even when the spatial prediction is fine.
+// 0.25 lets those frames through; the analyze pipeline still filters obvious
+// nonsense via prominence / NMS / body-height checks downstream.
+const VISIBILITY_THRESHOLD = 0.25;
 
 // Head midpoint = avg of nose + visible ears. Ears are often occluded in side
 // view, so fall back to nose alone rather than dropping the sample.

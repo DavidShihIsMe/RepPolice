@@ -32,6 +32,14 @@ export interface PoseOverlayProps {
    * wrapping — dynamic() with ssr:false strips refs from forwardRef components.
    */
   videoElementRef?: RefObject<HTMLVideoElement>;
+  /**
+   * Optional playback window. When both set:
+   *  - Seeks to clipStart once metadata is available.
+   *  - Pauses + clamps to clipEnd when the video's currentTime crosses it.
+   * Native scrubber still spans the full file; we don't fight manual scrubs.
+   */
+  clipStart?: number;
+  clipEnd?: number;
 }
 
 export default function PoseOverlay({
@@ -43,6 +51,8 @@ export default function PoseOverlay({
   className,
   onPose,
   videoElementRef,
+  clipStart,
+  clipEnd,
 }: PoseOverlayProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -55,6 +65,15 @@ export default function PoseOverlay({
   useEffect(() => {
     onPoseRef.current = onPose;
   }, [onPose]);
+
+  // Hold clip bounds in refs so the detection loop reads the latest values
+  // without remounting (which would tear down the detector).
+  const clipStartRef = useRef(clipStart);
+  const clipEndRef = useRef(clipEnd);
+  useEffect(() => {
+    clipStartRef.current = clipStart;
+    clipEndRef.current = clipEnd;
+  }, [clipStart, clipEnd]);
 
   // Mirror the element into both the internal ref and (if provided) the parent's.
   const setVideoEl = (el: HTMLVideoElement | null) => {
@@ -142,6 +161,17 @@ export default function PoseOverlay({
           }
         }
       }
+      // Clip-end clamp: pause playback once we cross the end-of-clip mark.
+      // Doesn't fight manual scrubs — only acts during forward playback.
+      const clipEndNow = clipEndRef.current;
+      if (
+        clipEndNow != null &&
+        video &&
+        !video.paused &&
+        video.currentTime >= clipEndNow
+      ) {
+        video.pause();
+      }
       if (v.requestVideoFrameCallback) {
         rvfcIdRef.current = v.requestVideoFrameCallback(onFrame);
       }
@@ -171,14 +201,32 @@ export default function PoseOverlay({
       smoother.reset();
     }
 
+    // Seek to clipStart once metadata is in so the timeline opens on the
+    // first rep instead of the start of the file. One-shot — manual scrubs
+    // afterward are honored.
+    function applyClipStart() {
+      const s = clipStartRef.current;
+      if (s != null && s > 0 && v.duration > 0) {
+        const safe = Math.min(Math.max(0, s), v.duration);
+        if (Math.abs(v.currentTime - safe) > 0.05) {
+          v.currentTime = safe;
+        }
+      }
+    }
+
     video.addEventListener("loadedmetadata", startLoop);
+    video.addEventListener("loadedmetadata", applyClipStart);
     video.addEventListener("seeking", resetTimestamp);
-    if (video.readyState >= 1) startLoop();
+    if (video.readyState >= 1) {
+      startLoop();
+      applyClipStart();
+    }
 
     return () => {
       stopped = true;
       window.clearInterval(uiInterval);
       video.removeEventListener("loadedmetadata", startLoop);
+      video.removeEventListener("loadedmetadata", applyClipStart);
       video.removeEventListener("seeking", resetTimestamp);
       if (rvfcIdRef.current != null && v.cancelVideoFrameCallback) {
         v.cancelVideoFrameCallback(rvfcIdRef.current);
